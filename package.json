@@ -1,0 +1,9 @@
+{
+  "name": "netcheck",
+  "version": "1.0.0",
+  "description": "威廉的 AI Club 网络分流检测",
+  "private": true,
+  "scripts": {
+    "deploy": "npx wrangler deploy -c wrangler-netcheck.toml"
+  }
+}

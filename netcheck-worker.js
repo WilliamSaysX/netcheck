@@ -528,12 +528,7 @@ async function runCheck() {
 
 renderRows();
 $('run').addEventListener('click', runCheck);
-// 等页面完成加载后再自动检测：load 前发起的请求会让标签页一直显示加载转圈
-if (document.readyState === 'complete') {
-  setTimeout(runCheck, 50);
-} else {
-  window.addEventListener('load', function () { setTimeout(runCheck, 50); });
-}
+setTimeout(runCheck, 50);
 </script>
 </body>
 </html>`;
