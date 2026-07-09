@@ -1,0 +1,21 @@
+# 网络分流检测 · 网页版（独立 Worker，与主 Worker zsxq-resources-v3 完全隔离）
+# 部署：npx wrangler deploy -c wrangler-netcheck.toml
+name = "zsxq-netcheck"
+main = "netcheck-worker.js"
+compatibility_date = "2024-03-21"
+no_bundle = true
+
+rules = [
+  { type = "ESModule", globs = ["netcheck-worker.js"] },
+]
+
+# Custom Domain 部署时自动创建 DNS 记录：
+# - check            检测页 + 「日常上网」探针（域名不含任何规则关键词 → 兜底线路）
+# - claude-check     「AI 专线」探针（含 claude，命中 DOMAIN-KEYWORD claude → AI 专线，新旧配置通吃）
+# - googlevideo-check「YouTube 泄漏」探针（旧配置 keyword google 命中 → 报警）
+# ⚠ 新增 Custom Domain 后边缘证书签发需要几分钟，期间 TLS 握手会被重置（SSL_ERROR_SYSCALL），耐心等
+routes = [
+  { pattern = "check.william.nyc.mn", custom_domain = true },
+  { pattern = "claude-check.william.nyc.mn", custom_domain = true },
+  { pattern = "googlevideo-check.william.nyc.mn", custom_domain = true },
+]
