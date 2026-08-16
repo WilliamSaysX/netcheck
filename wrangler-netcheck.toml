@@ -9,13 +9,15 @@ rules = [
   { type = "ESModule", globs = ["netcheck-worker.js"] },
 ]
 
-# Custom Domain 部署时自动创建 DNS 记录：
-# - check            检测页 + 「日常上网」探针（域名不含任何规则关键词 → 兜底线路）
-# - claude-check     「AI 专线」探针（含 claude，命中 DOMAIN-KEYWORD claude → AI 专线，新旧配置通吃）
-# - googlevideo-check「YouTube 泄漏」探针（旧配置 keyword google 命中 → 报警）
+# Custom Domain：check.william.nyc.mn 是唯一还在用的域名，托管检测页。
+#
+# claude-check / googlevideo-check 两个旧版诱饵探针域名已清理——旧探测
+# 方式依赖"未命中规则 → 兜底走机场"这一前提，新版配置改成 MATCH → DIRECT
+# （省流量）后该前提不再成立。现已改用真实第三方站点探测（claude.ai /
+# api.ipify.org / ipinfo.io / bbc.com，见 netcheck-worker.js 头部注释），
+# 不再需要任何自建探针域名。
+#
 # ⚠ 新增 Custom Domain 后边缘证书签发需要几分钟，期间 TLS 握手会被重置（SSL_ERROR_SYSCALL），耐心等
 routes = [
   { pattern = "check.william.nyc.mn", custom_domain = true },
-  { pattern = "claude-check.william.nyc.mn", custom_domain = true },
-  { pattern = "googlevideo-check.william.nyc.mn", custom_domain = true },
 ]

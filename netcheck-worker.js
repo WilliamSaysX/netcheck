@@ -1,17 +1,29 @@
 // ================================================================
 // netcheck-worker.js — 网络分流检测 · 网页版（独立 Worker，不影响主 Worker）
 //
-// 域名规划（均为本 Worker 的 Custom Domain，部署时自动建 DNS）：
-//   check.william.nyc.mn             检测页 + 「日常上网」探针（无规则命中 → 兜底机场线）
-//   claude-check.william.nyc.mn      「AI 专线」探针：域名含 claude，命中成员配置的
-//                                    DOMAIN-KEYWORD claude 规则 → 走 AI 专线（新旧配置通吃）
-//   googlevideo-check.william.nyc.mn 「YouTube 泄漏」探针：旧配置 DOMAIN-KEYWORD google
-//                                    命中 → 走 AI 专线（报警）；新配置落兜底（正常）
+// 【探针全部使用第三方真实站点，不再自建探针域名】
+// 旧版靠自建域名 + "域名关键字诱饵" 来探线路，依赖的是"未命中规则 → 兜底走
+// 机场"这一前提；新版配置已改成 MATCH → DIRECT（省流量），该前提不再成立，
+// 自建探针会全部掉进直连，判定必然误报"未检测到代理"。
 //
-// 注：新建 Custom Domain 后边缘证书需几分钟签发，期间握手被重置属正常，等一会即可。
-// AI 专线探针偶发不可用时，判定引擎自动降级为「AI 站点连通性」推断，页面仍可用。
+// 新方案改测四条线路的真实出口，每个探针都是「本身就会命中对应规则」的真站点：
+//   🏠 AI 专线      claude.ai/cdn-cgi/trace       命中 DOMAIN-KEYWORD,claude → 住宅IP
+//   ✈️ 国际中转      api.ipify.org/cdn-cgi/trace   在 gfw.txt → RULE-SET,overseas → 机场
+//   🔗 未分类境外    ipinfo.io/json                不命中任何规则 → MATCH,DIRECT → 本地
+//   🇨🇳 国内直连     myip.ipip.net                 GEOIP,CN → 本地
 //
-// 路由：GET /probe → 回显出口 IP + 地理信息（CORS 全开）；其余 → 检测页
+// 比诱饵域名更可信：测的是真实业务站点走哪条线，而不只是"规则能不能匹配"。
+// 三条线路出口 IP 互不相同 = 三线分流生效；中转出口塌陷到本地 = 境外规则集失效
+// （安卓 FlClash 上出现过的故障：除国内与 AI 站点外全部打不开）。
+//
+// Cloudflare 站点的 /cdn-cgi/trace 会回显 ip/loc/colo 且响应带
+// access-control-allow-origin: *，浏览器可直接跨域读取（claude.ai 与
+// api.ipify.org 均已实测）。ipinfo.io 额外给出城市与运营商。
+//
+// check.william.nyc.mn 现仅用于托管本检测页；claude-check / googlevideo-check
+// 两个 Custom Domain 已无用途，可随时下线。
+//
+// 路由：GET /probe → 回显出口 IP + 地理信息（保留兼容，页面已不再调用）；其余 → 检测页
 // ================================================================
 
 const CORS_HEADERS = {
@@ -125,8 +137,15 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
 .item { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
 .item:last-child { border-bottom: none; }
 /* 固定行高：待检测/检测中/出结果三种状态高度一致，重新检测时页面不跳动 */
-.item.parent { min-height: 96px; }
-.item.child { min-height: 52px; }
+/* 128px 实测能装下最长的结论文案换行成2行的情况（21字"✓ 走直连，既不
+   消耗中转流量也不消耗住宅IP流量"实测 121px）；四张卡片头部固定同一高度，
+   不管结论文字是 1 行还是 2 行都不会撑破对齐 */
+.item.parent { min-height: 128px; }
+/* 68px 而不是看起来够用的 52px：子探针成功时 .result 是空的（下面
+   :empty 规则隐藏），52px 由 min-height 下限撑住；一旦探针失败会显示
+   "✕ 超时"文字，实际需要 68px，超过下限就会比同卡片其他行更高，
+   卡片间也会跟着错位。统一按失败态的高度定，成功/失败都不会变形 */
+.item.child { min-height: 68px; }
 .item.child { margin-left: 14px; padding-left: 14px; border-left: 2px solid rgba(97, 175, 239, 0.22); }
 .item.child .name { font-size: 13px; }
 .info { flex: 1; min-width: 0; }
@@ -137,12 +156,22 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
 .pending { color: #6b6b80; }
 .ipv { font-family: 'SF Mono', Menlo, Consolas, monospace; color: #9fd2ff; }
 /* 地区/ISP 单行省略，长运营商名不折行 */
-.geo { color: #aab4cc; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* flex-basis: 100% 强制它永远自己占一行，不再跟 .ipv 抢同一行空间——
+   之前用 flex: 1 1 auto，能不能挤下同一行完全看这次的运营商名字长不
+   长、卡片这次多宽，同一类"内容决定行数"的问题在这挨个卡片身上反复
+   冒出来（这已经是第三处了：父行高度、note高度、现在是这里），干脆
+   从结构上让行数固定，不再让任何一处依赖内容长度去猜 */
+.geo { color: #aab4cc; flex: 1 1 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item.parent .name { font-size: 15px; color: #e0e0e6; }
 .item.parent .ipv { font-size: 14px; }
 .okonly { color: #8b95ab; }
 .fail { color: #ffb4aa; }
-.note { width: 100%; font-size: 11px; color: #7b8499; }
+/* 固定 2 行的高度（实测 line-height 18px，2 行=36px），不管这次的结论
+   文字够不够长到自然换行都占住这份空间——之前只给 .item.parent 设
+   min-height 试图"猜一个够用的高度"，结果四张卡片里文字最短的那句刚好
+   在某个宽度下只占 1 行，其余 3 句占 2 行，行数不一样卡片就跟着不一样高。
+   直接固定 .note 自己的高度，从根上让行数不再有差异，不用再猜任何数字 */
+.note { width: 100%; min-height: 36px; font-size: 11px; color: #7b8499; }
 .note.ok { color: #7ed99a; }
 .note.warn { color: #ffd27a; }
 .lat { flex-shrink: 0; font-size: 12px; font-family: 'SF Mono', Menlo, Consolas, monospace; }
@@ -178,19 +207,24 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
   .foot { font-size: 12px; }
   .foot-pc { display: block; }
 }
-/* 桌面：三条线路排成三栏等高卡片；三张卡片本身已含全部线路信息，
+/* 桌面：四条线路排成 2×2 等高卡片；卡片本身已含全部线路信息，
    汇总区只保留一句结论，不再重复线路明细 */
 @media (min-width: 1000px) {
   body { max-width: 1160px; padding: 48px 44px; }
   .groups {
     display: grid;
-    /* minmax(0,1fr) 强制三列严格等宽：长地区/ISP 文本收缩省略，而不是撑宽所在列 */
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    /* minmax(0,1fr) 强制各列严格等宽：长地区/ISP 文本收缩省略，而不是撑宽所在列 */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px;
   }
   .group { margin-bottom: 0; padding: 8px 20px; }
   .item.child { margin-left: 8px; padding-left: 14px; }
   .summary { margin-bottom: 18px; }
+}
+/* 超宽屏：四条线路一行排开，便于横向对比出口 IP */
+@media (min-width: 1500px) {
+  body { max-width: 1560px; }
+  .groups { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 </style>
 </head>
@@ -202,7 +236,7 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
   </div>
   <button class="btn" id="run">开始检测</button>
 </div>
-<div class="card">从当前设备直接访问各探测点，真实经过你的分流规则。<br>增强版应为三线分流：AI 站点走「静态住宅IP」，普通国外网站走「日常上网」，国内网站直连。</div>
+<div class="card">从当前设备直接访问各真实站点，完整经过你的分流规则。<br>增强版应为四段分流：AI 站点走「静态住宅IP」，被墙站点走「中转」，其余境外站点与国内网站均走直连（省流量）。</div>
 <div class="summary" id="summary"><div class="headline">检测中…</div></div>
 <div class="groups" id="list"></div>
 <div class="foot">
@@ -211,21 +245,57 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
 </div>
 <script>
 var TIMEOUT = 10000;
+// 四条线路各用一个「本身就会命中对应规则」的真实第三方站点做出口探针，
+// 不再使用自建诱饵域名（原理见文件头注释）。父行读出口 IP，子行测连通性。
 var TARGETS = [
-  { id: 'ai',      name: 'AI 专线出口',     host: 'claude-check.william.nyc.mn',      type: 'echo', url: 'https://claude-check.william.nyc.mn/probe' },
-  { id: 'claude',  name: 'Claude',          host: 'claude.ai',   parent: 'ai',        type: 'ping', url: 'https://claude.ai/cdn-cgi/trace' },
-  { id: 'chatgpt', name: 'ChatGPT',         host: 'chatgpt.com', parent: 'ai',        type: 'ping', url: 'https://chatgpt.com/cdn-cgi/trace' },
-  { id: 'google',  name: 'Google / Gemini', host: 'google.com',  parent: 'ai',        type: 'ping', url: 'https://www.google.com/generate_204' },
-  { id: 'daily',   name: '日常上网出口',     host: 'check.william.nyc.mn',             type: 'echo', url: 'https://check.william.nyc.mn/probe' },
-  // host 仅用于展示：显示真实的视频域名，探针域名是内部实现
-  { id: 'youtube', name: 'YouTube 视频流量', host: 'googlevideo.com', parent: 'daily', type: 'echo', url: 'https://googlevideo-check.william.nyc.mn/probe' },
-  // 日常上网的子站点须选「不在任何规则分类里」的域名（GitHub/X 等可被用户勾进 AI 专线）
-  { id: 'wiki',    name: '维基百科',         host: 'wikipedia.org', parent: 'daily',   type: 'ping', url: 'https://www.wikipedia.org/static/favicon/wikipedia.ico' },
-  { id: 'netflix', name: 'Netflix',          host: 'netflix.com',   parent: 'daily',   type: 'ping', url: 'https://www.netflix.com/favicon.ico' },
-  { id: 'cn',      name: '国内直连出口',     host: 'myip.ipip.net',                    type: 'cn' },
-  { id: 'baidu',   name: '百度',             host: 'baidu.com',    parent: 'cn',       type: 'ping', url: 'https://www.baidu.com/favicon.ico' },
-  { id: 'taobao',  name: '淘宝',             host: 'taobao.com',   parent: 'cn',       type: 'ping', url: 'https://www.taobao.com/favicon.ico' },
-  { id: 'bili',    name: '哔哩哔哩',         host: 'bilibili.com', parent: 'cn',       type: 'ping', url: 'https://www.bilibili.com/favicon.ico' }
+  // 🏠 静态住宅IP：claude.ai 命中 DOMAIN-KEYWORD,claude → 住宅IP。父行本身就是
+  // claude.ai，但 Claude 封号风险最受关注，额外加一行子探针让结果更直白。
+  // 卡片名跟"国际中转"/"国内直连"一样按连接方式命名（而不是"AI专线"这种
+  // 按用途命名），还能跟客户端里真实的策略组名「🏠 静态住宅IP」对上
+  { id: 'ai',      name: '静态住宅IP出口',    host: 'claude.ai',       type: 'trace',   url: 'https://claude.ai/cdn-cgi/trace' },
+  { id: 'claude',  name: 'Claude',           host: 'claude.ai',       parent: 'ai',    type: 'ping', url: 'https://claude.ai/cdn-cgi/trace' },
+  { id: 'chatgpt', name: 'ChatGPT',          host: 'chatgpt.com',     parent: 'ai',    type: 'ping', url: 'https://chatgpt.com/cdn-cgi/trace' },
+  { id: 'gemini',  name: 'Google / Gemini',  host: 'google.com',      parent: 'ai',    type: 'ping', url: 'https://www.google.com/generate_204' },
+
+  // ✈️ 国际中转：api.ipify.org 在 gfw.txt 清单内 → 命中 RULE-SET,overseas → 机场
+  // 这一行同时是「境外规则集健康度」探测器：规则集拉不下来时它会塌陷回本地出口
+  //
+  // ⚠️ 这条线的子探针必须选"只会被 gfw.txt 通用规则集命中、不会被用户自己
+  // 勾选的服务规则单独接管"的域名——proxy-config.json 里 twitter/reddit/
+  // discord/tiktok/facebook 等一整个社交类目都是可勾选的，勾了就会单独走
+  // DOMAIN-SUFFIX 规则命中住宅IP，不会落到这条通用中转线上，用它们做探针
+  // 会跟卡片实际语义对不上（x.com 就在这类目下，已经踩过一次，别再选中）。
+  // wikipedia.org / googlevideo.com / bbc.com 都不在 proxy-config.json 的
+  // 可选清单里，只会被 gfw.txt 兜底，才是这条线真正安全的探针
+  { id: 'relay',   name: '被墙站点出口',      host: 'api.ipify.org',   type: 'trace',   url: 'https://api.ipify.org/cdn-cgi/trace' },
+  // 探测 URL（功能性）用 www.googlevideo.com 这个固定域名：裸域名
+  // googlevideo.com 没有 DNS 记录，而 rr1---sn-xxx 这类主机名是 YouTube
+  // 动态分配的 CDN 节点，硬编码会失效——这条不能改。host 只是展示文案，
+  // 写成 "youtube.com/googlevideo.com" 是为了让用户看得懂这条测的是
+  // YouTube（单独 googlevideo.com 大多数人不知道是什么）
+  { id: 'youtube', name: 'YouTube',  host: 'youtube.com/googlevideo.com', parent: 'relay', type: 'ping', url: 'https://www.googlevideo.com/generate_204' },
+  { id: 'wiki',    name: '维基百科',          host: 'wikipedia.org',   parent: 'relay', type: 'ping', url: 'https://www.wikipedia.org/static/favicon/wikipedia.ico' },
+  // 不用 Netflix（对机房/代理IP主动限速检测，实测经常超时）；不用 x.com
+  // （见上方警告，它是用户可勾选的社交类目，不能保证走这条线）。BBC 不在
+  // 可勾选清单、也不像 Netflix 那样限速代理IP，实测稳定 76ms 左右
+  { id: 'bbc',     name: 'BBC',               host: 'bbc.com',         parent: 'relay', type: 'ping', url: 'https://www.bbc.com/favicon.ico' },
+
+  // 🇨🇳 国内直连
+  { id: 'cn',      name: '国内直连出口',      host: 'myip.ipip.net',   type: 'cn' },
+  { id: 'baidu',   name: '百度',              host: 'baidu.com',       parent: 'cn',    type: 'ping', url: 'https://www.baidu.com/favicon.ico' },
+  { id: 'taobao',  name: '淘宝',              host: 'taobao.com',      parent: 'cn',    type: 'ping', url: 'https://www.taobao.com/favicon.ico' },
+  { id: 'bili',    name: '哔哩哔哩',          host: 'bilibili.com',    parent: 'cn',    type: 'ping', url: 'https://www.bilibili.com/favicon.ico' },
+
+  // 🔗 未分类站点：ipinfo.io 不在 gfw.txt、也不在任何分流规则里 → 落 MATCH,DIRECT
+  // 走直连才是新版配置的正确行为（省流量的直接证据），不再当作异常。
+  // 排在最后一组：这是这次架构升级新增的兜底出口，放最后更能体现它是
+  // "前面三条线都没接住时的兜底"，而不是跟前面平级的第四条常规线路。
+  // 子行选直连实测稳定可达的站点；少数清单外站点（如 stackoverflow / npmjs）
+  // 直连会被干扰，那属于清单覆盖范围的问题，不是分流配置错误
+  { id: 'direct',  name: '未分类站点出口',    host: 'ipinfo.io',       type: 'ipinfo',  url: 'https://ipinfo.io/json' },
+  { id: 'amazon',  name: '亚马逊',            host: 'amazon.com',      parent: 'direct', type: 'ping', url: 'https://www.amazon.com/favicon.ico' },
+  { id: 'mozilla', name: 'Mozilla',           host: 'mozilla.org',     parent: 'direct', type: 'ping', url: 'https://www.mozilla.org/favicon.ico' },
+  { id: 'wsays',   name: '威廉的 AI Club',    host: 'williamsays.com', parent: 'direct', type: 'ping', url: 'https://www.williamsays.com/favicon.ico' }
 ];
 var COLORS = ['#61afef', '#66bb6a', '#f0c040', '#e06c75', '#c678dd', '#56b6c2'];
 var running = false;
@@ -247,6 +317,16 @@ function regionLabel(cc) {
 function lineKey(ip) {
   if (ip.indexOf(':') >= 0) return ip.toLowerCase().split(':').slice(0, 4).join(':');
   return ip.split('.').slice(0, 3).join('.');
+}
+// 判断"这是不是同一条线路"，境内和境外要用不同标准：
+// 境外线路（AI专线/中转）要精确比 IP 网段，证明确实是两条不同基础设施；
+// 境内线路（未分类境外/国内直连）不能直接比 IP——同一条本地宽带，两次
+// 探测可能一次出 IPv4 一次出 IPv6（双栈网络下 DNS 解析走了不同协议栈），
+// 这种情况下按 IP 比会误判成"不同线路"。境内场景下真正该问的是"这是不是
+// 国内出口"，不是"字节级别是不是同一个地址"，所以退化成按国家码归并
+function exitKey(r) {
+  if (r.cc === 'CN') return 'CN-LOCAL';
+  return lineKey(r.ip);
 }
 function fetchT(url, opt, ms) {
   var c = new AbortController();
@@ -281,6 +361,42 @@ async function probePing(url) {
   var t0 = performance.now();
   await fetchT(url, { mode: 'no-cors' });
   return { ok: true, pingOnly: true, latency: Math.round(performance.now() - t0) };
+}
+// Cloudflare 站点通用的 /cdn-cgi/trace：纯文本 key=value，回显 ip / loc(国家码) /
+// colo(就近机房)，且响应带 access-control-allow-origin:*，浏览器可直接跨域读
+async function probeTrace(url) {
+  await warm(url);
+  var t0 = performance.now();
+  var r = await fetchT(url);
+  var lat = Math.round(performance.now() - t0);
+  if (!r.ok) return { ok: true, limited: true, latency: lat };
+  var txt = await r.text();
+  var o = {};
+  txt.split('\\n').forEach(function (line) {
+    var i = line.indexOf('=');
+    if (i > 0) o[line.slice(0, i)] = line.slice(i + 1);
+  });
+  if (!o.ip) return { ok: true, limited: true, latency: lat };
+  return {
+    ok: true, ip: o.ip, latency: lat, cc: (o.loc || '').toUpperCase(),
+    region: regionLabel(o.loc),
+    detail: o.colo ? 'Cloudflare ' + o.colo : ''
+  };
+}
+// ipinfo.io：未分类境外线路的探针，顺带给出城市与运营商（比 trace 更详细）
+async function probeIpinfo(url) {
+  await warm(url);
+  var t0 = performance.now();
+  var r = await fetchT(url);
+  var lat = Math.round(performance.now() - t0);
+  if (!r.ok) return { ok: true, limited: true, latency: lat };
+  var d = await r.json();
+  if (!d.ip) return { ok: true, limited: true, latency: lat };
+  return {
+    ok: true, ip: d.ip, latency: lat, cc: (d.country || '').toUpperCase(),
+    region: (regionLabel(d.country) + ' ' + (d.city || '')).trim(),
+    detail: (d.org || '').replace(/^AS\\d+\\s+/, '')
+  };
 }
 async function probeCn() {
   var NON_MAINLAND = ['香港', '澳门', '台湾'];
@@ -320,6 +436,8 @@ async function probeCn() {
 async function probe(t) {
   try {
     if (t.type === 'echo') return await probeEcho(t.url);
+    if (t.type === 'trace') return await probeTrace(t.url);
+    if (t.type === 'ipinfo') return await probeIpinfo(t.url);
     if (t.type === 'cn') return await probeCn();
     return await probePing(t.url);
   } catch (e) {
@@ -395,29 +513,40 @@ function addNote(id, text, cls) {
 
 function verdict(byId) {
   var summary = $('summary');
-  // 首选 claude-check 探针读取 AI 专线出口 IP（域名含 claude，命中
-  // DOMAIN-KEYWORD claude 规则）；探针偶发不可用时降级为 AI 站点连通性推断
-  var ai = byId.ai && byId.ai.ip ? byId.ai : null;
-  var daily = byId.daily && byId.daily.ip ? byId.daily : null;
-  var cn = byId.cn && byId.cn.ip ? byId.cn : null;
-  var yt = byId.youtube && byId.youtube.ip ? byId.youtube : null;
-  var aiOk = ['claude', 'chatgpt'].some(function (id) { return byId[id] && byId[id].ok && !byId[id].error; });
-  var aiK = ai && lineKey(ai.ip), dailyK = daily && lineKey(daily.ip), cnK = cn && lineKey(cn.ip), ytK = yt && lineKey(yt.ip);
+  var ai     = byId.ai     && byId.ai.ip     ? byId.ai     : null;  // 住宅IP 线
+  var relay  = byId.relay  && byId.relay.ip  ? byId.relay  : null;  // 机场中转线
+  var direct = byId.direct && byId.direct.ip ? byId.direct : null;  // 未分类境外（应直连）
+  var cn     = byId.cn     && byId.cn.ip     ? byId.cn     : null;  // 国内直连
+  var aiK = ai && exitKey(ai), relayK = relay && exitKey(relay);
+  var directK = direct && exitKey(direct), cnK = cn && exitKey(cn);
+  // 出口 IP 偶发读不到时，用同线路子站点的连通性兜底推断该线路死活
+  var aiOk = ['claude', 'chatgpt', 'gemini'].some(function (id) { return byId[id] && byId[id].ok && !byId[id].error; });
+  var relayOk = ['wiki', 'bbc', 'youtube'].some(function (id) { return byId[id] && byId[id].ok && !byId[id].error; });
 
-  // 线路汇总（按 /24 网段归并）
+  // 线路汇总——用于给各行圆点按线路配色。境外线路按 /24 网段区分，
+  // 境内线路按国家码归并（同一条本地宽带 IPv4/IPv6 双栈不算两条线，
+  // 原因见 exitKey 定义处的注释）
   var exits = {}; var order = [];
-  [['ai', ai], ['youtube', yt], ['daily', daily], ['cn', cn]].forEach(function (p) {
-    var r = p[1];
-    if (!r) return;
-    var k = lineKey(r.ip);
-    if (!exits[k]) { exits[k] = { region: r.region, cc: r.cc, ips: {}, names: [] }; order.push(k); }
-    exits[k].ips[r.ip] = 1;
-    exits[k].names.push(TARGETS.filter(function (t) { return t.id === p[0]; })[0].name);
+  [['ai', ai], ['relay', relay], ['direct', direct], ['cn', cn]].forEach(function (p) {
+    if (!p[1]) return;
+    var k = exitKey(p[1]);
+    if (!exits[k]) { exits[k] = 1; order.push(k); }
   });
 
-  var directMode = (ai && ai.cc === 'CN') || (daily && daily.cc === 'CN') || (!ai && !daily && cn && cn.cc === 'CN');
-  var cnProxied = !directMode && cn && cn.cc && cn.cc !== 'CN';
-  var globalMode = cnProxied && dailyK && dailyK === cnK && (!aiK || aiK === dailyK);
+  // 本地出口基准：国内直连读到的最可信，其次用未分类境外那条
+  var localK = cnK || directK;
+  // 未开代理：AI 站点都走到了国内出口
+  var noProxy = (ai && ai.cc === 'CN') || (!ai && !aiOk && relay && relay.cc === 'CN');
+  // 国内网站没直连（客户端开了全局，或配置有问题）
+  var cnProxied = cn && cn.cc && cn.cc !== 'CN';
+  // 锁定境外出口模式：三条境外线路收敛到同一出口，国内仍直连
+  var lockMode = aiK && relayK && aiK === relayK && cnK && aiK !== cnK;
+  // 🚨 境外规则集失效：中转线塌陷回本地出口 → 部分境外站点会打不开（AI 线仍正常，
+  // 所以症状是"只有国内和 AI 站点能用"，安卓 FlClash 上真实出现过）
+  var rulesetDown = relayK && localK && relayK === localK && aiK && aiK !== relayK;
+  // 旧版配置：未分类境外也被送去中转（新版应走直连以省流量）。锁定模式下
+  // 三条境外线本来就同出口，不能算旧版，必须先排除
+  var legacyMode = !lockMode && directK && relayK && directK === relayK && cnK && directK !== cnK;
   var headline, cls;
 
   if (order.length === 0) {
@@ -425,29 +554,31 @@ function verdict(byId) {
       ? '⚠ 未能读取到出口 IP，请稍后重试'
       : '⚠ 检测失败：连国内网站都无法访问。请检查设备网络，或代理客户端是否卡死';
     cls = 'warn';
-  } else if (directMode) {
-    headline = '⚠ 未检测到代理：流量直连国内网络，AI 站点无法正常使用。请先开启代理客户端再检测';
-    cls = 'warn';
-  } else if (globalMode) {
-    headline = '所有流量（含国内网站）走同一国外出口——基础版配置，或客户端开了「全局」模式。升级增强版可三线分流';
+  } else if (noProxy) {
+    headline = '⚠ 未检测到代理：AI 站点走的是国内出口，无法正常使用。请先开启代理客户端再检测';
     cls = 'warn';
   } else if (cnProxied) {
-    headline = '⚠ 国内网站没有直连（出口在境外）。请确认客户端处于「规则」模式，或重新生成配置';
+    headline = '⚠ 国内网站没有直连（出口在境外），流量与速度都会被浪费。请确认客户端处于「规则」模式';
     cls = 'warn';
-  } else if (aiK && dailyK && aiK === dailyK) {
-    if (!cn) {
-      headline = '国外流量统一出口，且国内网站无法访问——大概率是「全局」模式或基础版配置。日常使用请切回「规则」模式';
-      cls = 'warn';
-    } else {
-      headline = '✓ 国外流量统一走住宅IP、国内直连——「锁定住宅IP」模式生效中';
-      cls = 'ok';
-    }
-  } else if (aiK && dailyK && cnK && cnK !== dailyK) {
-    headline = '✓ 三线分流已生效：AI 专线 / 日常上网 / 国内直连';
+  } else if (lockMode) {
+    headline = '✓ 「锁定境外出口」模式生效中：境外流量统一走静态住宅IP，国内直连';
     cls = 'ok';
-  } else if (!aiK && dailyK && cnK && aiOk) {
-    // AI 探针偶发失败但 AI 站点连通：降级判定
-    headline = '✓ 分流工作正常：国外走代理、国内直连，AI 站点连通正常（AI 专线出口读取失败，可重试）';
+  } else if (rulesetDown) {
+    headline = '⚠ 境外规则集未生效：部分境外站点会打不开（只有国内和 AI 站点可用）。请检查网络后重新载入配置，或重新生成';
+    cls = 'warn';
+  } else if (legacyMode) {
+    headline = '! 检测到旧版配置：未分类流量也走了中转，会持续消耗机场流量。建议重新生成配置';
+    cls = 'warn';
+  } else if (aiK && relayK && aiK !== relayK && directK && cnK && directK === cnK) {
+    headline = '✓ 分流完全正常：AI 走住宅IP、被墙站点走中转、其余境外与国内均直连（省流量）';
+    cls = 'ok';
+  } else if (!relayK && relayOk && aiK && cnK && aiK !== cnK) {
+    // 中转出口读取失败但被墙站点连通：降级判定
+    headline = '✓ 分流工作正常：AI 专线与被墙站点均连通，国内直连（中转出口读取失败，可重试）';
+    cls = 'ok';
+  } else if (!aiK && aiOk && relayK && cnK && relayK !== cnK) {
+    // AI 出口读取失败但 AI 站点连通：降级判定
+    headline = '✓ 分流工作正常：中转与国内直连均正常，AI 站点连通（AI 出口读取失败，可重试）';
     cls = 'ok';
   } else if (order.length > 1) {
     headline = '✓ 检测到 ' + order.length + ' 个不同出口，分流已生效';
@@ -457,12 +588,12 @@ function verdict(byId) {
     cls = 'warn';
   }
 
-  function rank(k) { return k === aiK ? 0 : k === dailyK ? 1 : k === cnK ? 2 : 3; }
+  function rank(k) { return k === aiK ? 0 : k === relayK ? 1 : k === directK ? 2 : 3; }
 
   // 汇总只展示一句结论；线路明细由下方三张卡片承载，这里只负责给圆点按线路上色
   order.sort(function (a, b) { return rank(a) - rank(b); }).forEach(function (k, i) {
-    [['ai', ai], ['youtube', yt], ['daily', daily], ['cn', cn]].forEach(function (p) {
-      if (p[1] && lineKey(p[1].ip) === k) {
+    [['ai', ai], ['relay', relay], ['direct', direct], ['cn', cn]].forEach(function (p) {
+      if (p[1] && exitKey(p[1]) === k) {
         var d = $('dot-' + p[0]);
         d.style.background = COLORS[i % COLORS.length];
         d.classList.add('on');
@@ -483,19 +614,32 @@ function verdict(byId) {
     }
   });
 
-  // 行级标注（未走代理 / 全局模式下不适用）
-  if (!directMode && !globalMode && !(aiK && dailyK && aiK === dailyK)) {
+  // 行级标注（未开代理 / 国内被代理属全局性异常，此时不再逐行解释）。
+  // 四张卡片都配一条结论，行数、行高对齐，视觉上不会有的卡片矮一截
+  if (!noProxy && !cnProxied) {
     if (!ai && aiOk) {
-      addNote('ai', 'AI 专线探针暂时不可用，不影响 AI 站点使用；可点「重新检测」重试', 'warn');
+      addNote('ai', 'AI 出口读取失败（不影响站点使用），可点「重新检测」重试', 'warn');
+    } else if (aiK) {
+      addNote('ai', '✓ 走静态住宅IP，AI 账号更不容易被风控或封禁', 'ok');
     }
-    // YouTube 泄漏检查：视频流量应走日常上网线路，不应与 AI 专线同出口
-    if (ytK && aiK && ytK === aiK) {
-      addNote('youtube', '⚠ 视频流量正在消耗静态住宅IP流量（旧版配置），请重新生成并更新配置', 'warn');
-    } else if (ytK && dailyK && ytK === dailyK) {
-      // 与父行同线路时不重复展示 IP/ISP，整行只留一句绿色结论
-      var ytRes = $('res-youtube');
-      if (ytRes) ytRes.innerHTML = '';
-      addNote('youtube', '✓ 走「日常上网」线路，不消耗住宅IP流量', 'ok');
+    if (!relay && relayOk) {
+      addNote('relay', '被墙站点出口读取失败，但被墙站点连通正常，可点「重新检测」重试', 'warn');
+    } else if (rulesetDown) {
+      addNote('relay', '⚠ 塌陷到本地出口：境外规则集没生效，部分境外站点会打不开', 'warn');
+    } else if (lockMode) {
+      addNote('relay', '✓ 锁定模式下，同样统一走住宅IP', 'ok');
+    } else if (relayK && aiK && relayK !== aiK) {
+      addNote('relay', '✓ 与住宅IP分开走，被墙站点不消耗住宅IP流量', 'ok');
+    }
+    if (lockMode) {
+      addNote('direct', '✓ 锁定模式下，境外流量统一走住宅IP', 'ok');
+    } else if (directK && cnK && directK === cnK) {
+      addNote('direct', '✓ 走直连，既不消耗中转流量也不消耗住宅IP流量', 'ok');
+    } else if (legacyMode) {
+      addNote('direct', '⚠ 走了中转：旧版配置会让未分类流量持续消耗机场流量', 'warn');
+    }
+    if (cnK) {
+      addNote('cn', '✓ 走直连，不占用任何代理流量，速度最快', 'ok');
     }
   }
 }
@@ -520,6 +664,19 @@ async function runCheck() {
     byId[t.id] = r;
     setResult(t, r);
   }));
+  // 未分类站点出口用 ipinfo.io（通用境外地理库），国内直连用 ipip.net
+  // （专攻中国 IP、城市级精度更高）——两边巧合命中同一个 IP 时（未分类
+  // 流量这次也走了直连、跟国内直连是同一个出口），ipinfo.io 对国内 IP
+  // 的地区粒度经常比 ipip.net 粗（例如只能查到注册城市"广州"，查不出
+  // 实际使用城市"深圳"），会让用户看到同一个 IP 却显示两个不同地区、
+  // 误以为是检测出错。这里改成直接复用 ipip.net 那份更准的结果重新渲染，
+  // 真的是两个不同 IP 的正常情况（未分类流量确实是境外出口）不受影响。
+  if (byId.direct && byId.cn && byId.direct.ip && byId.direct.ip === byId.cn.ip) {
+    byId.direct.region = byId.cn.region;
+    byId.direct.detail = byId.cn.detail;
+    var directTarget = TARGETS.filter(function (t) { return t.id === 'direct'; })[0];
+    if (directTarget) setResult(directTarget, byId.direct);
+  }
   verdict(byId);
   btn.disabled = false;
   btn.textContent = '\\u91cd\\u65b0\\u68c0\\u6d4b';
