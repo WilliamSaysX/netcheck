@@ -295,7 +295,9 @@ var TARGETS = [
   { id: 'direct',  name: '未分类站点出口',    host: 'ipinfo.io',       type: 'ipinfo',  url: 'https://ipinfo.io/json' },
   { id: 'amazon',  name: '亚马逊',            host: 'amazon.com',      parent: 'direct', type: 'ping', url: 'https://www.amazon.com/favicon.ico' },
   { id: 'mozilla', name: 'Mozilla',           host: 'mozilla.org',     parent: 'direct', type: 'ping', url: 'https://www.mozilla.org/favicon.ico' },
-  { id: 'wsays',   name: '威廉的 AI Club',    host: 'williamsays.com', parent: 'direct', type: 'ping', url: 'https://www.williamsays.com/favicon.ico' }
+  // 规范站点域名是裸域。www 曾遗留到停放页，测速它会把 SSL/源站错误误显示成
+  // “网站延迟”；这里必须直接测实际服务域名。
+  { id: 'wsays',   name: '威廉的 AI Club',    host: 'williamsays.com', parent: 'direct', type: 'ping', url: 'https://williamsays.com/favicon.ico' }
 ];
 var COLORS = ['#61afef', '#66bb6a', '#f0c040', '#e06c75', '#c678dd', '#56b6c2'];
 var running = false;
