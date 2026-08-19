@@ -99,7 +99,7 @@ body {
   margin: 0 auto;
   width: 100%;
 }
-.head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.head { margin-bottom: 16px; }
 h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px; }
 .sub { font-size: 12px; color: #8b95ab; margin-top: 6px; }
 .card {
@@ -183,9 +183,9 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
   font-size: 14px; font-weight: 700; white-space: nowrap;
 }
 .btn:disabled { opacity: 0.6; }
-/* 打码开关单独一行，左对齐，紧贴卡片左边缘——跟「重新检测」不在同一
-   视觉层级：这是个截图辅助功能，不是核心操作，不该跟主按钮抢位置 */
-.mask-row { display: flex; justify-content: flex-start; margin-bottom: 10px; }
+/* 「重新检测」跟打码开关放一行，紧挨着结果区上方——不再单独待在页头，
+   跟它实际影响的内容（下面的卡片）离得更近 */
+.mask-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .mask-btn {
   border: none; cursor: pointer; background: transparent;
   color: #8b95ab; font-size: 12px; padding: 4px 6px; white-space: nowrap;
@@ -239,15 +239,15 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
 </head>
 <body>
 <div class="head">
-  <div>
-    <h1>🌐 网络分流检测</h1>
-    <div class="sub">威廉的 AI Club · 手机 / 电脑 / 软路由下的任意设备均可检测</div>
-  </div>
-  <button class="btn" id="run">开始检测</button>
+  <h1>🌐 网络分流检测</h1>
+  <div class="sub">威廉的 AI Club · 手机 / 电脑 / 软路由下的任意设备均可检测</div>
 </div>
 <div class="card">从当前设备直接访问各真实站点，完整经过你的分流规则。<br>增强版应为四段分流：AI 站点走「静态住宅IP」，被墙站点走「中转」，其余境外站点与国内网站均走直连（省流量）。</div>
 <div class="summary" id="summary"><div class="headline">检测中…</div></div>
-<div class="mask-row"><button class="mask-btn" id="maskBtn">🙈 隐藏IP/地区（方便截图）</button></div>
+<div class="mask-row">
+  <button class="mask-btn" id="maskBtn">🙈 隐藏IP/地区（方便截图）</button>
+  <button class="btn" id="run">开始检测</button>
+</div>
 <div class="groups" id="list"></div>
 <div class="foot">
   <div>检测基于「威廉的 AI Club」配置规则，第三方配置仅供参考</div>
