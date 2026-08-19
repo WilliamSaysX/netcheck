@@ -183,6 +183,10 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
   font-size: 14px; font-weight: 700; white-space: nowrap;
 }
 .btn:disabled { opacity: 0.6; }
+.btn-group { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.btn.secondary {
+  background: #23233a; color: #c7cbe0; border: 1px solid #3a3a55;
+}
 .foot { margin-top: auto; padding-top: 28px; font-size: 11px; color: #6b6b80; line-height: 1.7; text-align: center; }
 .foot a { color: #61afef; text-decoration: none; }
 .foot-pc { display: none; } /* 插件推荐仅在电脑端显示 */
@@ -234,7 +238,10 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
     <h1>🌐 网络分流检测</h1>
     <div class="sub">威廉的 AI Club · 手机 / 电脑 / 软路由下的任意设备均可检测</div>
   </div>
-  <button class="btn" id="run">开始检测</button>
+  <div class="btn-group">
+    <button class="btn" id="run">开始检测</button>
+    <button class="btn secondary" id="maskBtn">🙈 隐藏IP/地区</button>
+  </div>
 </div>
 <div class="card">从当前设备直接访问各真实站点，完整经过你的分流规则。<br>增强版应为四段分流：AI 站点走「静态住宅IP」，被墙站点走「中转」，其余境外站点与国内网站均走直连（省流量）。</div>
 <div class="summary" id="summary"><div class="headline">检测中…</div></div>
@@ -479,7 +486,16 @@ function setPending(t) {
   d.classList.remove('on');
 }
 
+// 截图隐藏开关：只打码 IP 和地区这类可定位到人的信息，延迟/连通性等结论保留
+var MASKED = false;
+var lastResults = {};
+function maskText(s) {
+  if (!MASKED) return s;
+  return String(s).replace(/[0-9A-Za-z一-龥]/g, '*');
+}
+
 function setResult(t, r) {
+  lastResults[t.id] = r;
   var el = $('res-' + t.id);
   var latEl = $('lat-' + t.id);
   // 新结果就位，解除清空阶段冻结的行高
@@ -495,7 +511,7 @@ function setResult(t, r) {
   }
   if (r.ip) {
     var parts = [r.region, r.detail].filter(Boolean).join(' \\u00b7 ');
-    el.innerHTML = '<span class="ipv">' + esc(r.ip) + '</span><span class="geo">' + esc(parts) + '</span>';
+    el.innerHTML = '<span class="ipv">' + esc(maskText(r.ip)) + '</span><span class="geo">' + esc(maskText(parts)) + '</span>';
   } else if (r.limited) {
     el.innerHTML = '<span class="okonly">\\u5df2\\u8fde\\u901a\\uff08\\u8bfb\\u53d6\\u53d7\\u9650\\uff09</span>';
   } else {
@@ -687,6 +703,14 @@ async function runCheck() {
 
 renderRows();
 $('run').addEventListener('click', runCheck);
+$('maskBtn').addEventListener('click', function () {
+  MASKED = !MASKED;
+  $('maskBtn').textContent = MASKED ? '🙉 显示IP/地区' : '🙈 隐藏IP/地区';
+  // 不重新检测，只用已有结果重新渲染，打码/取消打码瞬间完成
+  TARGETS.forEach(function (t) {
+    if (lastResults[t.id] !== undefined) setResult(t, lastResults[t.id]);
+  });
+});
 setTimeout(runCheck, 50);
 </script>
 </body>
