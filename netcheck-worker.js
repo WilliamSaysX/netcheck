@@ -245,8 +245,8 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
 <div class="card">从当前设备直接访问各真实站点，完整经过你的分流规则。<br>增强版应为四段分流：AI 站点走「静态住宅IP」，被墙站点走「中转」，其余境外站点与国内网站均走直连（省流量）。</div>
 <div class="summary" id="summary"><div class="headline">检测中…</div></div>
 <div class="mask-row">
-  <button class="mask-btn" id="maskBtn">🙈 隐藏IP/地区（方便截图）</button>
   <button class="btn" id="run">开始检测</button>
+  <button class="mask-btn" id="maskBtn">🙈 隐藏IP/地区（方便截图）</button>
 </div>
 <div class="groups" id="list"></div>
 <div class="foot">
