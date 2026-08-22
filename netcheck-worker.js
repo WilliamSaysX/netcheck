@@ -659,13 +659,17 @@ function verdict(byId) {
       addNote('relay', '被墙站点出口读取失败，但被墙站点连通正常，可点「重新检测」重试', 'warn');
     } else if (rulesetDown) {
       addNote('relay', '⚠ 塌陷到本地出口：境外规则集没生效，部分境外站点会打不开', 'warn');
-    } else if (lockMode) {
+    } else if (lockMode && relayK && aiK && relayK === aiK) {
       addNote('relay', '✓ 锁定模式下，同样统一走住宅IP', 'ok');
+    } else if (lockMode) {
+      addNote('relay', '⚠ 开着锁定模式，但这次测出的出口跟住宅IP不一致，建议重新生成配置', 'warn');
     } else if (relayK && aiK && relayK !== aiK) {
       addNote('relay', '✓ 与住宅IP分开走，被墙站点不消耗住宅IP流量', 'ok');
     }
-    if (lockMode) {
+    if (lockMode && directK && aiK && directK === aiK) {
       addNote('direct', '✓ 锁定模式下，境外流量统一走住宅IP', 'ok');
+    } else if (lockMode) {
+      addNote('direct', '⚠ 开着锁定模式，但这次测出的出口跟住宅IP不一致，建议重新生成配置', 'warn');
     } else if (directK && cnK && directK === cnK) {
       addNote('direct', '✓ 走直连，既不消耗中转流量也不消耗住宅IP流量', 'ok');
     } else if (legacyMode) {
