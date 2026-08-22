@@ -498,6 +498,10 @@ function setPending(t) {
   var d = $('dot-' + t.id);
   d.style.background = '';
   d.classList.remove('on');
+  // 新一轮检测开始，把上一轮缓存的结论清掉——不然 setResult() 会在
+  // verdict() 算出新结论之前，先把上一轮的旧结论重新贴回去，等 verdict()
+  // 再贴一条新的，就会看到同一条结论重复两遍。
+  delete lastNotes[t.id];
 }
 
 // 截图隐藏开关：只打码 IP 和地区这类可定位到人的信息，延迟/连通性等结论保留。
@@ -527,9 +531,16 @@ function maskGeo(s) {
 // id 最后一条结论，setResult 重建完 innerHTML 后自己再补回去。
 var lastNotes = {};
 
+function clearNote(id) {
+  var el = $('res-' + id);
+  if (!el) return;
+  el.querySelectorAll('.note').forEach(function (n) { n.remove(); });
+}
+
 function appendCachedNote(id) {
   var note = lastNotes[id];
   if (!note) return;
+  clearNote(id);
   var el = $('res-' + id);
   if (!el) return;
   var n = document.createElement('div');
@@ -568,6 +579,7 @@ function setResult(t, r) {
 
 function addNote(id, text, cls) {
   lastNotes[id] = { text: text, cls: cls };
+  clearNote(id);
   var el = $('res-' + id);
   if (!el) return;
   var n = document.createElement('div');
