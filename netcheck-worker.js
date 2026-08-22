@@ -512,8 +512,16 @@ var MASKED = false;
 var lastResults = {};
 function maskIp(ip) {
   if (!MASKED) return ip;
-  var segs = String(ip).split('.');
-  if (segs.length !== 4) return String(ip).replace(/[0-9A-Za-z:]/g, '*');
+  var s = String(ip);
+  if (s.indexOf(':') !== -1) {
+    // IPv6：按冒号分组，前两组原样保留，其余每组打码（"::" 缩写产生的
+    // 空分组原样保留，不然会破坏地址结构）
+    return s.split(':').map(function (grp, i) {
+      return (i < 2 || grp === '') ? grp : grp.replace(/./g, '*');
+    }).join(':');
+  }
+  var segs = s.split('.');
+  if (segs.length !== 4) return s.replace(/[0-9A-Za-z]/g, '*');
   return segs.map(function (seg, i) { return i < 2 ? seg : seg.replace(/./g, '*'); }).join('.');
 }
 function maskGeo(s) {
