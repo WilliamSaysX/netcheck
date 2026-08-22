@@ -186,12 +186,23 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
 /* 「重新检测」跟打码开关放一行，紧挨着结果区上方——不再单独待在页头，
    跟它实际影响的内容（下面的卡片）离得更近 */
 .mask-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.mask-btn {
-  border: none; cursor: pointer; background: transparent;
-  color: #8b95ab; font-size: 12px; padding: 4px 6px; white-space: nowrap;
-  display: flex; align-items: center; gap: 4px;
+.mask-toggle {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  color: #8b95ab; font-size: 12px; white-space: nowrap; user-select: none;
 }
-.mask-btn:hover { color: #c7cbe0; }
+.mask-toggle:hover { color: #c7cbe0; }
+.mask-toggle input { display: none; }
+.mask-toggle .slider {
+  position: relative; width: 34px; height: 18px; flex-shrink: 0;
+  background: #3a3a55; border-radius: 999px; transition: background .2s;
+}
+.mask-toggle .slider::before {
+  content: ''; position: absolute; left: 2px; top: 2px;
+  width: 14px; height: 14px; background: #fff; border-radius: 50%;
+  transition: transform .2s;
+}
+.mask-toggle input:checked + .slider { background: #34c759; }
+.mask-toggle input:checked + .slider::before { transform: translateX(16px); }
 .foot { margin-top: auto; padding-top: 28px; font-size: 11px; color: #6b6b80; line-height: 1.7; text-align: center; }
 .foot a { color: #61afef; text-decoration: none; }
 .foot-pc { display: none; } /* 插件推荐仅在电脑端显示 */
@@ -246,7 +257,7 @@ h1 { font-size: 19px; color: #fff; display: flex; align-items: center; gap: 8px;
 <div class="summary" id="summary"><div class="headline">检测中…</div></div>
 <div class="mask-row">
   <button class="btn" id="run">开始检测</button>
-  <button class="mask-btn" id="maskBtn">🙈 隐藏IP/地区（方便截图）</button>
+  <label class="mask-toggle"><span>隐藏 IP/地区</span><input type="checkbox" id="maskToggle"><span class="slider"></span></label>
 </div>
 <div class="groups" id="list"></div>
 <div class="foot">
@@ -491,7 +502,7 @@ function setPending(t) {
 
 // 截图隐藏开关：只打码 IP 和地区这类可定位到人的信息，延迟/连通性等结论保留。
 // 全部打成星号看着像一坨乱码，反而不像"脱敏"——改成常见的部分脱敏：
-// IP 留第一段（能看出是个 IP，看不出具体是谁），地区留国旗+国家（够看
+// IP 留前两段（能看出是个 IP，看不出具体是谁），地区留国旗+国家（够看
 // 分流对不对），城市/ISP 这些更具体的信息才打码。
 var MASKED = false;
 var lastResults = {};
@@ -499,7 +510,7 @@ function maskIp(ip) {
   if (!MASKED) return ip;
   var segs = String(ip).split('.');
   if (segs.length !== 4) return String(ip).replace(/[0-9A-Za-z:]/g, '*');
-  return segs.map(function (seg, i) { return i === 0 ? seg : seg.replace(/./g, '*'); }).join('.');
+  return segs.map(function (seg, i) { return i < 2 ? seg : seg.replace(/./g, '*'); }).join('.');
 }
 function maskGeo(s) {
   if (!MASKED) return s;
@@ -507,6 +518,24 @@ function maskGeo(s) {
   return String(s).split(' ').map(function (tok, i) {
     return i < 2 ? tok : tok.replace(/[0-9A-Za-z一-龥]/g, '*');
   }).join(' ');
+}
+
+// setResult 每次都会用 innerHTML 整段重建 .result（要重新塞打码后的
+// IP/地区文本），如果 addNote() 已经往里面挂了一条结论，会被这次重建
+// 直接冲掉。切换打码开关时会对已有结果重新调一遍 setResult，之前这里
+// 没重新挂 note，导致一开打码结论文字就全没了——用 lastNotes 缓存住每个
+// id 最后一条结论，setResult 重建完 innerHTML 后自己再补回去。
+var lastNotes = {};
+
+function appendCachedNote(id) {
+  var note = lastNotes[id];
+  if (!note) return;
+  var el = $('res-' + id);
+  if (!el) return;
+  var n = document.createElement('div');
+  n.className = 'note' + (note.cls ? ' ' + note.cls : '');
+  n.textContent = note.text;
+  el.appendChild(n);
 }
 
 function setResult(t, r) {
@@ -518,6 +547,7 @@ function setResult(t, r) {
   if (row) row.style.minHeight = '';
   if (!r.ok) {
     el.innerHTML = '<span class="fail">\\u2715 ' + esc(r.error) + '</span>';
+    appendCachedNote(t.id);
     return;
   }
   if (r.latency !== undefined) {
@@ -533,9 +563,11 @@ function setResult(t, r) {
     // 连通性子行：绿色圆点 + 延迟已足够表达成功，不再堆「已连通」文字
     el.innerHTML = '';
   }
+  appendCachedNote(t.id);
 }
 
 function addNote(id, text, cls) {
+  lastNotes[id] = { text: text, cls: cls };
   var el = $('res-' + id);
   if (!el) return;
   var n = document.createElement('div');
@@ -722,9 +754,8 @@ async function runCheck() {
 
 renderRows();
 $('run').addEventListener('click', runCheck);
-$('maskBtn').addEventListener('click', function () {
-  MASKED = !MASKED;
-  $('maskBtn').textContent = MASKED ? '🙉 显示IP/地区' : '🙈 隐藏IP/地区';
+$('maskToggle').addEventListener('change', function () {
+  MASKED = this.checked;
   // 不重新检测，只用已有结果重新渲染，打码/取消打码瞬间完成
   TARGETS.forEach(function (t) {
     if (lastResults[t.id] !== undefined) setResult(t, lastResults[t.id]);
